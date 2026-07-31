@@ -1,0 +1,1 @@
+globalThis.G8_META = {"bundle_radius_m":2000,"amenity_names":["boulevard","cafe","gym","hospital","kindergarten","market","park","pharmacy","school","supermarket"],"property_count":100,"s1_provider":"mapbox","s1_case_ids":["V1_001","V1_002","V1_003","V1_004","V1_005","V1_006","V1_007","V1_008","V1_009","V1_010","V1_011","V1_012","V1_013"]};

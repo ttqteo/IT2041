@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <title>Smoke test — IT2041 web tĩnh</title>
+</head>
+<body>
+  <!--
+    Harness kiểm tra web tĩnh chạy thật trong trình duyệt: nạp index.html vào
+    iframe, bấm các nút, rồi kiểm DOM kết quả. Đây là file test, KHÔNG thuộc
+    trang demo.
+
+    Chạy:
+      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+        --headless=new --allow-file-access-from-files --virtual-time-budget=15000 \
+        --dump-dom file://<đường dẫn>/IT2041/tools/smoke.html
+
+    Cần --allow-file-access-from-files thì iframe file:// mới đọc được từ trang cha.
+  -->
+  <iframe id="frame" src="../index.html" width="1280" height="900"></iframe>
+  <pre id="out">đang chạy...</pre>
+
+  <script>
+    var results = [];
+    function check(name, condition, detail) {
+      results.push((condition ? "PASS" : "FAIL") + "  " + name + (detail ? "  — " + detail : ""));
+    }
+
+    function report() {
+      var failed = results.filter(function (r) { return r.indexOf("FAIL") === 0; }).length;
+      document.getElementById("out").textContent =
+        results.join("\n") + "\n\nTỔNG: " + results.length + " kiểm tra, " + failed + " FAIL\n" +
+        (failed ? "SMOKE_RESULT=FAIL" : "SMOKE_RESULT=PASS");
+    }
+
+    window.addEventListener("load", function () {
+      var frame = document.getElementById("frame");
+      var doc, win;
+      try {
+        doc = frame.contentDocument;
+        win = frame.contentWindow;
+      } catch (e) {
+        check("truy cập được iframe", false, e.message);
+        return report();
+      }
+
+      setTimeout(function () {
+        try { runChecks(doc, win); } catch (e) {
+          check("harness chạy không lỗi", false, e.message + "\n" + e.stack);
+        }
+        report();
+      }, 1200);
+    });
+
+    function $(doc, id) { return doc.getElementById(id); }
+
+    function runChecks(doc, win) {
+      // ── Nạp dữ liệu ──
+      check("bundle nạp đủ, không có banner lỗi",
+        $(doc, "bundleBanner").innerHTML.trim() === "",
+        $(doc, "bundleBanner").textContent.slice(0, 120));
+      check("nạp 100 BĐS", win.G8_PROPERTIES && win.G8_PROPERTIES.length === 100,
+        "có " + (win.G8_PROPERTIES || []).length);
+      check("bảng tiện ích phủ 100 BĐS",
+        win.G8_AMENITIES && Object.keys(win.G8_AMENITIES).length === 100);
+      check("case picker có 13 case",
+        $(doc, "casePicker").options.length === 13,
+        "có " + $(doc, "casePicker").options.length);
+      check("form đã nạp sẵn case đầu tiên",
+        $(doc, "freeText").value.trim().length > 0);
+
+      // "Nạp case" phải tái tạo ĐÚNG input gốc, nếu không thì Top X hiển thị sẽ
+      // khác lần chạy tham chiếu mà không ai biết.
+      var caseId = $(doc, "casePicker").value;
+      var origin = win.G8_CASES.validation_cases_v1
+        .filter(function (c) { return c.case_id === caseId; })[0].input;
+      var prefKeys = Object.keys(origin.soft_preferences).sort();
+      var sliderKeys = Array.prototype.map.call(
+        doc.querySelectorAll("#weights input[data-weight]"), function (i) { return i.dataset.weight; });
+      var missing = prefKeys.filter(function (k) { return sliderKeys.indexOf(k) === -1; });
+      check("sidebar phủ hết tiêu chí của case", missing.length === 0, missing.join(","));
+      var wrong = prefKeys.filter(function (k) {
+        var slider = doc.querySelector('#weights input[data-weight="' + k + '"]');
+        return Number(slider.value) !== Number(origin.soft_preferences[k].weight);
+      });
+      check("nạp case đặt đúng trọng số", wrong.length === 0, wrong.join(","));
+      var extra = sliderKeys.filter(function (k) {
+        var slider = doc.querySelector('#weights input[data-weight="' + k + '"]');
+        return prefKeys.indexOf(k) === -1 && Number(slider.value) > 0;
+      });
+      check("nạp case tắt tiêu chí case không dùng", extra.length === 0, extra.join(","));
+
+      // ── Tour hướng dẫn tự mở lần đầu ──
+      check("tour tự mở khi vào lần đầu", doc.getElementById("tourBubble") !== null);
+      check("tour bắt đầu ở bước 1",
+        doc.getElementById("tourBubble") &&
+        doc.querySelector("#tourBubble .tour-step").textContent.indexOf("Bước 1/") === 0,
+        doc.getElementById("tourBubble") ? doc.querySelector("#tourBubble .tour-step").textContent : "");
+      check("có vùng tô sáng", doc.getElementById("tourSpot") !== null);
+
+      // Đi tiếp một bước rồi quay lại, để chắc điều hướng hai chiều đều chạy
+      doc.querySelector('#tourBubble [data-tour="next"]').click();
+      check("bấm Tiếp sang bước 2",
+        doc.querySelector("#tourBubble .tour-step").textContent.indexOf("Bước 2/") === 0,
+        doc.querySelector("#tourBubble .tour-step").textContent);
+      doc.querySelector('#tourBubble [data-tour="prev"]').click();
+      check("bấm Quay lại về bước 1",
+        doc.querySelector("#tourBubble .tour-step").textContent.indexOf("Bước 1/") === 0,
+        doc.querySelector("#tourBubble .tour-step").textContent);
+
+      doc.querySelector('#tourBubble [data-tour="skip"]').click();
+      check("bấm Bỏ qua thì tour đóng hẳn",
+        doc.getElementById("tourBubble") === null && doc.getElementById("tourSpot") === null);
+
+      doc.getElementById("tourOpenBtn").click();
+      check("nút Hướng dẫn mở lại được tour", doc.getElementById("tourBubble") !== null);
+      doc.querySelector('#tourBubble [data-tour="skip"]').click();
+
+      // ── Mặc định phải là so sánh cả hai ──
+      check("mặc định chọn 'Cả hai'",
+        doc.querySelector(".segmented button.active").dataset.solution === "both",
+        doc.querySelector(".segmented button.active").dataset.solution);
+
+      // ── Màn 1: chạy Solution 2 thật ──
+      doc.querySelector('[data-solution="solution2"]').click();
+      $(doc, "runBtn").click();
+      var cards = doc.querySelectorAll("#results .result-card");
+      check("chạy S2 ra đúng 1 card", cards.length === 1, "có " + cards.length);
+      var rows = doc.querySelectorAll("#results .lst");
+      check("S2 trả 5 kết quả", rows.length === 5, "có " + rows.length);
+      check("card S2 ghi nhãn chạy trực tiếp",
+        doc.querySelector("#results .provenance.live") !== null);
+      check("có khối giải thích", doc.querySelector("#results .explain .md").textContent.length > 20);
+
+      var firstIds = Array.prototype.map.call(doc.querySelectorAll("#results .lst-sub span:first-child"),
+        function (s) { return s.textContent; });
+      check("kết quả có property_id", firstIds.length === 5 && /^(GV|TB)_/.test(firstIds[0]), firstIds.join(","));
+
+      // ── Sửa form phải đổi kết quả thật ──
+      $(doc, "budget").value = "3,000,000,000";
+      $(doc, "bedrooms").value = "2";
+      $(doc, "runBtn").click();
+      var newIds = Array.prototype.map.call(doc.querySelectorAll("#results .lst-sub span:first-child"),
+        function (s) { return s.textContent; });
+      check("sửa ngân sách làm đổi Top X", newIds.join(",") !== firstIds.join(","),
+        firstIds.join(",") + "  ->  " + newIds.join(","));
+
+      // Mọi kết quả phải nằm trong ngân sách mới
+      var map = {};
+      win.G8_PROPERTIES.forEach(function (p) { map[p.property_id] = p; });
+      var overBudget = newIds.filter(function (id) { return map[id].price_million_vnd > 3000; });
+      check("Top X tôn trọng ngân sách 3 tỷ", overBudget.length === 0, overBudget.join(","));
+      var tooFewBeds = newIds.filter(function (id) { return map[id].bedrooms < 2; });
+      check("Top X tôn trọng số phòng ngủ", tooFewBeds.length === 0, tooFewBeds.join(","));
+
+      // ── Nhu cầu tự do đo được ──
+      $(doc, "budget").value = "8,000,000,000";
+      $(doc, "bedrooms").value = "3";
+      $(doc, "freeText").value = "ưu tiên nhiều chợ xung quanh, muốn khu yên tĩnh";
+      $(doc, "runBtn").click();
+      check("panel 'hệ thống hiểu gì' hiện ra",
+        doc.querySelector("#results .parsed") !== null);
+      check("nhận diện nhu cầu chợ là ưu tiên đo được",
+        doc.querySelector("#results .pill.soft") !== null &&
+        doc.querySelector("#results .pill.soft").textContent.indexOf("chợ") !== -1,
+        (doc.querySelector("#results .pill.soft") || {}).textContent);
+      check("gắn cờ nhu cầu chưa hỗ trợ",
+        doc.querySelector("#results .pill.unsup") !== null);
+      check("hiện chip tiện ích lấy từ dữ liệu POI",
+        doc.querySelector("#results .amenity") !== null);
+
+      // ── Ràng buộc cứng từ free-text ──
+      $(doc, "freeText").value = "nhà phải có chợ trong vòng 1km";
+      $(doc, "runBtn").click();
+      check("ràng buộc cứng hiện pill 'bắt buộc'",
+        doc.querySelector("#results .pill.hard") !== null);
+
+      // ── Solution 1 phải dán nhãn replay ──
+      $(doc, "freeText").value = "Gia đình có 2 con nhỏ, ưu tiên gần trường và công viên.";
+      doc.querySelector('[data-solution="both"]').click();
+      $(doc, "loadCaseBtn").click();
+      $(doc, "runBtn").click();
+      var bothCards = doc.querySelectorAll("#results .result-card");
+      check("chế độ 'Cả hai' ra 2 card", bothCards.length === 2, "có " + bothCards.length);
+      check("S1 dán nhãn kết quả đã lưu",
+        doc.querySelector("#results .provenance.replay") !== null);
+      check("S1 không cảnh báo lệch form khi vừa nạp case",
+        doc.querySelector("#results .provenance.replay").textContent.indexOf("không phản ánh") === -1);
+
+      // Sửa form xong thì S1 phải cảnh báo
+      $(doc, "budget").value = "4,000,000,000";
+      $(doc, "runBtn").click();
+      check("sửa form thì S1 cảnh báo không phản ánh thay đổi",
+        doc.querySelector("#results .provenance.replay").textContent.indexOf("không phản ánh") !== -1);
+
+      // ── Màn 2: đánh giá ──
+      $(doc, "validateBtn").click();
+      check("chuyển sang màn đánh giá", $(doc, "screen-eval").classList.contains("active"));
+      var metrics = doc.querySelectorAll("#evaluation .metric");
+      check("hiện metric cho cả 2 solution", metrics.length === 8, "có " + metrics.length);
+      check("có ô Hard pass",
+        doc.querySelector("#evaluation .metric span").textContent.indexOf("Hard pass") !== -1);
+
+      // Solution 1 xuất reason_tags tiếng Việt tự do nên metric priority coverage
+      // không đối chiếu được. Phải hiện N/A, KHÔNG được hiện 0% vì đọc thành
+      // "Solution 1 trượt sạch".
+      var evalCards = doc.querySelectorAll("#evaluation .result-card");
+      var coverageOf = function (card) {
+        var found = null;
+        card.querySelectorAll(".metric").forEach(function (m) {
+          if (m.querySelector("span").textContent.indexOf("Priority coverage") !== -1) {
+            found = m.querySelector("strong").textContent.trim();
+          }
+        });
+        return found;
+      };
+      var s1Card = null, s2Card = null;
+      evalCards.forEach(function (card) {
+        var name = card.querySelector(".result-top strong").textContent.trim();
+        if (name === "SOLUTION1") s1Card = card;
+        if (name === "SOLUTION2") s2Card = card;
+      });
+      check("S1 hiện Priority coverage N/A chứ không phải 0%",
+        s1Card && coverageOf(s1Card) === "N/A", s1Card ? coverageOf(s1Card) : "không thấy card");
+      check("S2 vẫn hiện Priority coverage bằng số",
+        s2Card && /%$/.test(coverageOf(s2Card) || ""), s2Card ? coverageOf(s2Card) : "không thấy card");
+      check("có giải thích vì sao N/A",
+        $(doc, "evaluation").textContent.indexOf("không phải 0%") !== -1);
+
+      // ── Màn 3: batch ──
+      $(doc, "batchBtn").click();
+      check("chuyển sang màn batch", $(doc, "screen-batch").classList.contains("active"));
+      var batchTables = doc.querySelectorAll("#batchPanel table");
+      var batchRows = batchTables[batchTables.length - 1].querySelectorAll("tbody tr");
+      check("batch chạy đủ 13 case", batchRows.length === 13, "có " + batchRows.length);
+      check("batch có ô metric tổng hợp",
+        doc.querySelectorAll("#batchPanel .metric").length > 0);
+      check("batch ghi rõ số case tính được cho mỗi metric",
+        $(doc, "batchPanel").textContent.indexOf("/13") !== -1);
+      check("batch KHÔNG gộp priority coverage của S1 vào trung bình",
+        $(doc, "batchPanel").textContent.indexOf("solution1_priority_coverage") === -1);
+      check("batch giải thích vì sao thiếu dòng đó",
+        $(doc, "batchPanel").textContent.indexOf("không đo được") !== -1);
+      check("batch vẫn có priority coverage của S2",
+        $(doc, "batchPanel").textContent.indexOf("solution2_priority_coverage") !== -1);
+
+      // Favicon phải là file cục bộ để mở file:// vẫn hiện
+      var iconLink = doc.querySelector('link[rel="icon"]');
+      check("có favicon cục bộ", iconLink && !/^https?:/.test(iconLink.getAttribute("href")),
+        iconLink ? iconLink.getAttribute("href") : "không có");
+
+      // ── Màn 4: dataset ──
+      doc.querySelector('[data-screen="data"]').click();
+      check("chuyển sang màn dataset", $(doc, "screen-data").classList.contains("active"));
+      check("bảng dataset đủ 100 dòng",
+        doc.querySelectorAll("#dataTable tbody tr").length === 100,
+        "có " + doc.querySelectorAll("#dataTable tbody tr").length);
+      check("scatter vẽ đủ 100 chấm",
+        doc.querySelectorAll("#scatterPanel circle").length === 100,
+        "có " + doc.querySelectorAll("#scatterPanel circle").length);
+      check("sidebar ẩn ở màn dataset", $(doc, "app").classList.contains("no-sidebar"));
+
+      // Sắp xếp bảng
+      var priceHeader = doc.querySelector('#dataTable th[data-key="price_billion_vnd"]');
+      priceHeader.click();
+      var firstPrice = parseFloat(doc.querySelector("#dataTable tbody tr td:nth-child(4)").textContent.replace(",", "."));
+      priceHeader = doc.querySelector('#dataTable th[data-key="price_billion_vnd"]');
+      priceHeader.click();
+      var lastPrice = parseFloat(doc.querySelector("#dataTable tbody tr td:nth-child(4)").textContent.replace(",", "."));
+      check("sắp xếp theo giá đổi chiều được", firstPrice < lastPrice,
+        firstPrice + " rồi " + lastPrice);
+
+      // Lọc
+      $(doc, "filterText").value = "GV_0";
+      $(doc, "filterText").dispatchEvent(new win.Event("input"));
+      var filtered = doc.querySelectorAll("#dataTable tbody tr").length;
+      check("lọc theo mã thu hẹp bảng", filtered > 0 && filtered < 100, "còn " + filtered);
+
+      // ── Không có tài nguyên ngoài ──
+      var externals = [];
+      doc.querySelectorAll("script[src], link[href], img[src]").forEach(function (el) {
+        var url = el.getAttribute("src") || el.getAttribute("href") || "";
+        if (/^https?:|^\/\//.test(url)) externals.push(url);
+      });
+      check("không nạp tài nguyên từ Internet", externals.length === 0, externals.join(", "));
+    }
+  </script>
+</body>
+</html>
